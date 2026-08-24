@@ -3,7 +3,7 @@
  * Plugin Name: WP Fortress Guard
  * Plugin URI: https://github.com/TonyBlue5/wp-fortress-guard
  * Description: General-purpose WordPress hardening, login protection, upload shielding, security headers, administrator monitoring and malware indicators.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: Antonis Kanaris Tools
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -71,21 +71,27 @@ final class WP_Fortress_Guard {
 register_activation_hook(__FILE__,array('WP_Fortress_Guard','activate'));WP_Fortress_Guard::init();
 
 final class WPFG_GitHub_Updater {
- const VERSION='1.1.0'; const API='https://api.github.com/repos/TonyBlue5/wp-fortress-guard/releases/latest';
+ const VERSION='1.2.0'; const API='https://api.github.com/repos/TonyBlue5/wp-fortress-guard/releases/latest';
+ const PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAnrcZ+pMRgEVDSjrBn4C1\nVVOXavhgRoOu6NF4e8WmE5KlXA3MSkdPGm/iDpuOr74zSU7PHd2vibWtevciGnq9\nNrSZNUOC5LPim5R9MquI864UXZx+AG7l+7VHWlHNM1Kus1i1E3TAv8LXe+5kTOGl\nNjpkVI0q7pTYM/yIhC00do2Bh4+BvltYC+S0XNlBfxer8j4YBKFHOt50l47kPgvr\n8w13rH/HqGCzDq/5g1biYJEd9PdpF5R+6DyTDGlxsvpxHUG+Ag+pTss4NsA+u0J3\n9ldDgPPQm2bTyg1yuIU5H5O6tg62uoNF9FzO35fGQQn1BO5fsIslQmkKr002SmLO\nzgHHPvrLBorHc1CSUUCed0JwlkKAFht3J+JTDUHMpXuTpu3pJ396pIVz5NX/VJpF\n496H3bi8dLRTKzH+/1UYjeWLo8mGboKYJOGOmHSQWfWjVNK4tetRBgrWJ9EiHHKr\n1Gd4jvrHjLxmIZpvtNUrPTJRfPhWt8e0C11mUooJrQbTAgMBAAE=\n-----END PUBLIC KEY-----";
  public static function init(){add_filter('pre_set_site_transient_update_plugins',array(__CLASS__,'updates'));add_filter('plugins_api',array(__CLASS__,'details'),20,3);add_filter('upgrader_pre_download',array(__CLASS__,'verify_download'),10,4);}
  private static function release(){
   $cached=get_site_transient('wpfg_github_release');if(is_array($cached))return $cached;
   $response=wp_remote_get(self::API,array('timeout'=>12,'headers'=>array('Accept'=>'application/vnd.github+json','User-Agent'=>'WP-Fortress-Guard/'.self::VERSION)));
   if(is_wp_error($response)||wp_remote_retrieve_response_code($response)!==200){set_site_transient('wpfg_github_release',array(),HOUR_IN_SECONDS);return array();}
-  $json=json_decode(wp_remote_retrieve_body($response),true);$zip='';$sha_url='';
-  foreach((array)($json['assets']??array()) as $asset){if(($asset['name']??'')==='wp-fortress-guard.zip')$zip=$asset['browser_download_url']??'';if(($asset['name']??'')==='wp-fortress-guard.zip.sha256')$sha_url=$asset['browser_download_url']??'';}
+  $json=json_decode(wp_remote_retrieve_body($response),true);$zip='';$sha_url='';$sig_url='';
+  foreach((array)($json['assets']??array()) as $asset){if(($asset['name']??'')==='wp-fortress-guard.zip')$zip=$asset['browser_download_url']??'';if(($asset['name']??'')==='wp-fortress-guard.zip.sha256')$sha_url=$asset['browser_download_url']??'';if(($asset['name']??'')==='wp-fortress-guard.zip.sig')$sig_url=$asset['browser_download_url']??'';}
   $hash='';if($sha_url){$h=wp_remote_get($sha_url,array('timeout'=>10,'redirection'=>5,'headers'=>array('User-Agent'=>'WP-Fortress-Guard/'.self::VERSION)));if(!is_wp_error($h)&&wp_remote_retrieve_response_code($h)===200&&preg_match('/\b([a-f0-9]{64})\b/i',wp_remote_retrieve_body($h),$m))$hash=strtolower($m[1]);}
-  $data=array('version'=>ltrim((string)($json['tag_name']??''),'vV'),'package'=>esc_url_raw($zip),'sha256'=>$hash,'url'=>esc_url_raw($json['html_url']??''),'body'=>wp_kses_post($json['body']??''),'published'=>sanitize_text_field($json['published_at']??''));
-  if(!$data['version']||!$data['package']||!$data['sha256'])$data=array();set_site_transient('wpfg_github_release',$data,12*HOUR_IN_SECONDS);return $data;
+  $data=array('version'=>ltrim((string)($json['tag_name']??''),'vV'),'package'=>esc_url_raw($zip),'sha256'=>$hash,'signature'=>esc_url_raw($sig_url),'url'=>esc_url_raw($json['html_url']??''),'body'=>wp_kses_post($json['body']??''),'published'=>sanitize_text_field($json['published_at']??''));
+  if(!$data['version']||!$data['package']||!$data['sha256']||!$data['signature'])$data=array();set_site_transient('wpfg_github_release',$data,12*HOUR_IN_SECONDS);return $data;
  }
  public static function updates($transient){if(!is_object($transient)||empty($transient->checked))return $transient;$r=self::release();$plugin=plugin_basename(__FILE__);if($r&&version_compare(self::VERSION,$r['version'],'<')){$transient->response[$plugin]=(object)array('slug'=>'wp-fortress-guard','plugin'=>$plugin,'new_version'=>$r['version'],'url'=>$r['url'],'package'=>$r['package'],'requires'=>'6.0','requires_php'=>'7.4');}else unset($transient->response[$plugin]);return $transient;}
  public static function details($result,$action,$args){if($action!=='plugin_information'||empty($args->slug)||$args->slug!=='wp-fortress-guard')return $result;$r=self::release();if(!$r)return $result;return (object)array('name'=>'WP Fortress Guard','slug'=>'wp-fortress-guard','version'=>$r['version'],'author'=>'Antonis Kanaris Tools','homepage'=>$r['url'],'download_link'=>$r['package'],'requires'=>'6.0','requires_php'=>'7.4','sections'=>array('description'=>'Layered WordPress hardening and monitoring.','changelog'=>$r['body']?:'Security and compatibility maintenance release.'));
  }
- public static function verify_download($reply,$package,$upgrader,$hook_extra){$r=self::release();if(!$r||$package!==$r['package'])return $reply;$tmp=download_url($package,300);if(is_wp_error($tmp))return $tmp;$actual=strtolower(hash_file('sha256',$tmp));if(!hash_equals($r['sha256'],$actual)){@unlink($tmp);return new WP_Error('wpfg_bad_signature','WP Fortress Guard update failed SHA-256 verification.');}return $tmp;}
+ public static function verify_download($reply,$package,$upgrader,$hook_extra){
+  $r=self::release();if(!$r||$package!==$r['package'])return $reply;if(!function_exists('openssl_verify'))return new WP_Error('wpfg_crypto_unavailable','WP Fortress Guard blocked the update because OpenSSL signature verification is unavailable.');
+  $tmp=download_url($package,300);if(is_wp_error($tmp))return $tmp;$actual=strtolower(hash_file('sha256',$tmp));if(!hash_equals($r['sha256'],$actual)){@unlink($tmp);return new WP_Error('wpfg_bad_checksum','WP Fortress Guard blocked the update: SHA-256 verification failed.');}
+  $response=wp_remote_get($r['signature'],array('timeout'=>15,'redirection'=>5,'headers'=>array('User-Agent'=>'WP-Fortress-Guard/'.self::VERSION)));if(is_wp_error($response)||wp_remote_retrieve_response_code($response)!==200){@unlink($tmp);return new WP_Error('wpfg_signature_missing','WP Fortress Guard blocked the update: the digital signature could not be downloaded.');}
+  $signature=base64_decode(trim(wp_remote_retrieve_body($response)),true);$contents=file_get_contents($tmp);$verified=$signature!==false&&$contents!==false&&openssl_verify($contents,$signature,self::PUBLIC_KEY,OPENSSL_ALGO_SHA256)===1;unset($contents);if(!$verified){@unlink($tmp);return new WP_Error('wpfg_bad_signature','WP Fortress Guard blocked the update: the publisher digital signature is invalid.');}return $tmp;
+ }
 }
 WPFG_GitHub_Updater::init();
