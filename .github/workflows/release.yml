@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag, e.g. v1.1.0'
+          description: 'Version tag, e.g. v1.2.0'
         required: true
         type: string
 
@@ -26,13 +26,23 @@ jobs:
           echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
           php -l wp-fortress-guard.php
           grep -F "Version: ${TAG#v}" wp-fortress-guard.php
-      - name: Build plugin ZIP and checksum
+      - name: Build plugin ZIP, checksum and signature
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
+          test -n "$RELEASE_SIGNING_KEY"
           mkdir -p build/wp-fortress-guard
           cp wp-fortress-guard.php readme.txt LICENSE build/wp-fortress-guard/
           cd build
           zip -qr wp-fortress-guard.zip wp-fortress-guard
           sha256sum wp-fortress-guard.zip > wp-fortress-guard.zip.sha256
+          printf '%s' "$RELEASE_SIGNING_KEY" > release-private.pem
+          chmod 600 release-private.pem
+          openssl pkey -in release-private.pem -check -noout
+          openssl dgst -sha256 -sign release-private.pem -out wp-fortress-guard.zip.sig.bin wp-fortress-guard.zip
+          base64 -w 0 wp-fortress-guard.zip.sig.bin > wp-fortress-guard.zip.sig
+          printf '\n' >> wp-fortress-guard.zip.sig
+          rm -f release-private.pem wp-fortress-guard.zip.sig.bin
           unzip -tq wp-fortress-guard.zip
       - name: Create tag and GitHub release
         env:
@@ -41,5 +51,4 @@ jobs:
         run: |
           git tag "$TAG"
           git push origin "$TAG"
-          gh release create "$TAG" build/wp-fortress-guard.zip build/wp-fortress-guard.zip.sha256 --generate-notes --title "WP Fortress Guard ${TAG#v}"
-
+          gh release create "$TAG" build/wp-fortress-guard.zip build/wp-fortress-guard.zip.sha256 build/wp-fortress-guard.zip.sig --generate-notes --title "WP Fortress Guard ${TAG#v}"
