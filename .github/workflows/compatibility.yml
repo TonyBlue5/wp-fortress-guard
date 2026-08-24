@@ -1,0 +1,51 @@
+name: WordPress compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.1', '8.2', '8.3', '8.4']
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: wordpress
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: wp-cli
+      - name: PHP syntax check
+        run: php -l wp-fortress-guard.php
+      - name: Install latest WordPress
+        run: |
+          mkdir -p /tmp/wp-test
+          wp core download --path=/tmp/wp-test --force
+          wp config create --path=/tmp/wp-test --dbname=wordpress --dbuser=root --dbpass=root --dbhost=127.0.0.1 --skip-check
+          wp core install --path=/tmp/wp-test --url=http://localhost --title=FortressTest --admin_user=testadmin --admin_password='Strong-Test-Password-2026!' --admin_email=test@example.com --skip-email
+          mkdir -p /tmp/wp-test/wp-content/plugins/wp-fortress-guard
+          cp wp-fortress-guard.php readme.txt /tmp/wp-test/wp-content/plugins/wp-fortress-guard/
+          wp plugin activate wp-fortress-guard --path=/tmp/wp-test
+          wp plugin status wp-fortress-guard --path=/tmp/wp-test
+          wp eval "echo class_exists('WP_Fortress_Guard') ? 'loaded' : 'missing';" --path=/tmp/wp-test | grep loaded
+
