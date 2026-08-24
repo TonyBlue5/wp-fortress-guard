@@ -1,0 +1,91 @@
+<?php
+/**
+ * Plugin Name: WP Fortress Guard
+ * Plugin URI: https://github.com/TonyBlue5/wp-fortress-guard
+ * Description: General-purpose WordPress hardening, login protection, upload shielding, security headers, administrator monitoring and malware indicators.
+ * Version: 1.1.0
+ * Author: Antonis Kanaris Tools
+ * Requires at least: 6.0
+ * Requires PHP: 7.4
+ * Update URI: https://github.com/TonyBlue5/wp-fortress-guard
+ */
+defined('ABSPATH') || exit;
+
+if(!defined('DISALLOW_FILE_EDIT')) define('DISALLOW_FILE_EDIT',true);
+
+final class WP_Fortress_Guard {
+ const SLUG='wp-fortress-guard'; const NONCE='wpfg_nonce'; const OPT='wpfg_settings'; const LOG='wpfg_events';
+ public static function defaults(){return array('login_limit'=>5,'lock_minutes'=>30,'disable_xmlrpc'=>1,'disable_app_passwords'=>0,'block_rest_users'=>1,'block_author_enum'=>1,'strong_admin_passwords'=>1,'security_headers'=>1,'email_alerts'=>1);}
+ public static function settings(){return wp_parse_args((array)get_option(self::OPT,array()),self::defaults());}
+ public static function init(){
+  add_action('admin_menu',array(__CLASS__,'menu'));add_action('admin_notices',array(__CLASS__,'admin_notice'));
+  add_action('wp_ajax_wpfg_save',array(__CLASS__,'save'));add_action('wp_ajax_wpfg_scan',array(__CLASS__,'scan'));add_action('wp_ajax_wpfg_repair_uploads',array(__CLASS__,'repair_uploads'));add_action('wp_ajax_wpfg_clear_log',array(__CLASS__,'clear_log'));
+  add_filter('authenticate',array(__CLASS__,'check_lock'),25,3);add_action('wp_login_failed',array(__CLASS__,'login_failed'));add_action('wp_login',array(__CLASS__,'login_success'),10,2);add_filter('login_errors',array(__CLASS__,'generic_login_error'));
+  add_action('send_headers',array(__CLASS__,'headers'));add_filter('rest_pre_dispatch',array(__CLASS__,'rest_guard'),10,3);add_action('template_redirect',array(__CLASS__,'author_guard'),1);
+  add_filter('xmlrpc_enabled',array(__CLASS__,'xmlrpc'));add_filter('xmlrpc_methods',array(__CLASS__,'xmlrpc_methods'));add_filter('wp_is_application_passwords_available',array(__CLASS__,'application_passwords'));
+  add_filter('the_generator','__return_empty_string');
+  add_filter('wp_check_filetype_and_ext',array(__CLASS__,'block_executables'),100,5);add_filter('upload_mimes',array(__CLASS__,'safe_mimes'));
+  add_action('user_register',array(__CLASS__,'user_changed'),20);add_action('set_user_role',array(__CLASS__,'role_changed'),20,3);add_action('user_profile_update_errors',array(__CLASS__,'strong_password'),10,3);
+ }
+ public static function activate(){if(!get_option(self::OPT))add_option(self::OPT,self::defaults(),'','no');self::write_upload_protection();self::event('activated','WP Fortress Guard activated.');}
+ private static function auth(){if(!current_user_can('manage_options'))wp_send_json_error(array('message'=>'Administrator permission required.'),403);check_ajax_referer(self::NONCE,'nonce');}
+ private static function ip(){return sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR']??'unknown'));}
+ private static function lock_key($suffix='',$username=''){return 'wpfg_'.md5(self::ip().'|'.strtolower((string)$username).'|'.$suffix);}
+ public static function check_lock($user,$username,$password){if(get_transient(self::lock_key('lock',$username)))return new WP_Error('wpfg_locked','Login temporarily unavailable. Please try again later.');return $user;}
+ public static function login_failed($username){$s=self::settings();$key=self::lock_key('fails',$username);$n=(int)get_transient($key)+1;set_transient($key,$n,max(15,$s['lock_minutes'])*MINUTE_IN_SECONDS);if($n>=$s['login_limit']){set_transient(self::lock_key('lock',$username),1,$s['lock_minutes']*MINUTE_IN_SECONDS);delete_transient($key);self::event('login_lock','Temporary login lock for IP '.self::ip());}}
+ public static function login_success($login,$user){delete_transient(self::lock_key('fails',$login));delete_transient(self::lock_key('lock',$login));}
+ public static function generic_login_error(){return 'Login failed. Check your credentials or try again later.';}
+ public static function headers(){if(!self::settings()['security_headers']||headers_sent())return;header('X-Content-Type-Options: nosniff');header('X-Frame-Options: SAMEORIGIN');header('Referrer-Policy: strict-origin-when-cross-origin');header_remove('X-Powered-By');}
+ public static function rest_guard($result,$server,$request){if($result||!self::settings()['block_rest_users']||is_user_logged_in())return $result;$route=$request->get_route();if(preg_match('#^/wp/v2/users(?:/|$)#',$route))return new WP_Error('wpfg_rest_blocked','Authentication required.',array('status'=>403));return $result;}
+ public static function author_guard(){if(!self::settings()['block_author_enum']||is_user_logged_in()||is_admin())return;if(isset($_GET['author'])&&ctype_digit((string)$_GET['author'])){status_header(404);nocache_headers();exit;}}
+ public static function xmlrpc($enabled){return self::settings()['disable_xmlrpc']?false:$enabled;}
+ public static function xmlrpc_methods($methods){if(self::settings()['disable_xmlrpc'])return array();unset($methods['pingback.ping'],$methods['pingback.extensions.getPingbacks']);return $methods;}
+ public static function application_passwords($available){return self::settings()['disable_app_passwords']?false:$available;}
+ public static function safe_mimes($mimes){foreach(array('php','php3','php4','php5','php7','php8','phtml','phar','cgi','pl','py','sh') as $x)unset($mimes[$x]);return $mimes;}
+ public static function block_executables($data,$file,$filename,$mimes,$real_mime=false){if(preg_match('/\.(php[0-9]?|phtml|phar|cgi|pl|py|sh)(\.|$)/i',$filename))return array('ext'=>false,'type'=>false,'proper_filename'=>false);return $data;}
+ public static function strong_password($errors,$update,$user){if(!self::settings()['strong_admin_passwords']||empty($_POST['pass1']))return;$roles=(array)($user->roles??array());$is_admin=in_array('administrator',$roles,true)||(isset($_POST['role'])&&sanitize_key($_POST['role'])==='administrator');if(!$is_admin)return;$p=(string)wp_unslash($_POST['pass1']);$ok=strlen($p)>=16&&preg_match('/[A-Z]/',$p)&&preg_match('/[a-z]/',$p)&&preg_match('/\d/',$p)&&preg_match('/[^A-Za-z0-9]/',$p);if(!$ok)$errors->add('wpfg_weak_password','Administrator passwords must contain at least 16 characters, upper/lowercase letters, a number and a symbol.');}
+ public static function user_changed($id){$u=get_userdata($id);if($u&&in_array('administrator',(array)$u->roles,true))self::admin_alert($u,'New administrator account detected.');}
+ public static function role_changed($id,$role,$old){if($role==='administrator'){$u=get_userdata($id);if($u)self::admin_alert($u,'Administrator role granted.');}}
+ private static function admin_alert($user,$reason){$msg=$reason.' User: '.$user->user_login.' (ID '.$user->ID.') IP: '.self::ip();self::event('admin_change',$msg);if(self::settings()['email_alerts'])wp_mail(get_option('admin_email'),'['.wp_specialchars_decode(get_bloginfo('name'),ENT_QUOTES).'] Security administrator alert',$msg);}
+ private static function event($type,$message){$log=(array)get_option(self::LOG,array());array_unshift($log,array('time'=>current_time('mysql'),'type'=>sanitize_key($type),'message'=>sanitize_text_field($message)));update_option(self::LOG,array_slice($log,0,150),false);}
+ private static function uploads_dir(){$u=wp_upload_dir();if(!empty($u['error'])||empty($u['basedir']))throw new Exception('Uploads directory unavailable.');return wp_normalize_path($u['basedir']);}
+ private static function write_upload_protection(){try{$dir=self::uploads_dir();if(!is_dir($dir)&&!wp_mkdir_p($dir))return false;$path=$dir.'/.htaccess';$old=is_file($path)?file_get_contents($path):'';$begin='# BEGIN WP Fortress Guard';$end='# END WP Fortress Guard';$block=$begin."\n<FilesMatch \"\\.(php[0-9]?|phtml|phar|cgi|pl|py|sh)$\">\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n</FilesMatch>\n".$end;if(strpos($old,$begin)!==false)$new=preg_replace('/'.preg_quote($begin,'/').'.*?'.preg_quote($end,'/').'/s',$block,$old);else$new=rtrim($old)."\n\n".$block."\n";return file_put_contents($path,$new,LOCK_EX)!==false;}catch(Throwable $e){return false;}}
+ public static function scan(){self::auth();@set_time_limit(0);try{$dir=self::uploads_dir();$found=array();$it=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir,FilesystemIterator::SKIP_DOTS));foreach($it as $f){if(!$f->isFile())continue;$p=wp_normalize_path($f->getPathname());if(preg_match('/\.(php[0-9]?|phtml|phar|cgi|pl|py|sh)$/i',$p)){$found[]=array('path'=>ltrim(substr($p,strlen($dir)),'/'),'bytes'=>$f->getSize(),'modified'=>date('Y-m-d H:i:s',$f->getMTime()));if(count($found)>=250)break;}}if($found)self::event('scan_alert',count($found).' executable file(s) found in uploads.');wp_send_json_success(array('found'=>$found,'count'=>count($found)));}catch(Throwable $e){wp_send_json_error(array('message'=>$e->getMessage()),500);}}
+ public static function repair_uploads(){self::auth();$ok=self::write_upload_protection();if($ok)self::event('uploads_protected','Uploads .htaccess protection installed/refreshed.');$ok?wp_send_json_success(array('message'=>'Uploads protection installed.')):wp_send_json_error(array('message'=>'Could not write uploads/.htaccess. Configure the server manually.'),500);}
+ public static function save(){self::auth();$s=array('login_limit'=>min(20,max(3,absint($_POST['login_limit']??5))),'lock_minutes'=>min(1440,max(5,absint($_POST['lock_minutes']??30))),'disable_xmlrpc'=>empty($_POST['disable_xmlrpc'])?0:1,'disable_app_passwords'=>empty($_POST['disable_app_passwords'])?0:1,'block_rest_users'=>empty($_POST['block_rest_users'])?0:1,'block_author_enum'=>empty($_POST['block_author_enum'])?0:1,'strong_admin_passwords'=>empty($_POST['strong_admin_passwords'])?0:1,'security_headers'=>empty($_POST['security_headers'])?0:1,'email_alerts'=>empty($_POST['email_alerts'])?0:1);update_option(self::OPT,$s,false);self::write_upload_protection();self::event('settings','Security settings updated.');wp_send_json_success(array('message'=>'Security settings saved.'));}
+ public static function clear_log(){self::auth();delete_option(self::LOG);wp_send_json_success(array('message'=>'Event log cleared.'));}
+ public static function admin_notice(){if(!current_user_can('manage_options'))return;$server=strtolower($_SERVER['SERVER_SOFTWARE']??'');if(strpos($server,'nginx')!==false)echo '<div class="notice notice-warning"><p><strong>WP Fortress Guard:</strong> Nginx detected. The uploads .htaccess rule is not enforced; add the equivalent server rule through your host.</p></div>';}
+ public static function menu(){add_management_page('WP Fortress Guard','WP Fortress Guard','manage_options',self::SLUG,array(__CLASS__,'page'));}
+ public static function page(){if(!current_user_can('manage_options'))return;$s=self::settings();$nonce=wp_create_nonce(self::NONCE);$log=(array)get_option(self::LOG,array());?>
+ <div class="wrap"><h1>WP Fortress Guard</h1><p>Layered WordPress hardening. Keep WordPress, themes and plugins updated and use a server/WAF security layer as well.</p>
+ <table class="form-table"><tbody>
+ <tr><th>Login protection</th><td>Lock after <input id="limit" type="number" min="3" max="20" value="<?php echo esc_attr($s['login_limit']);?>"> failures for <input id="minutes" type="number" min="5" max="1440" value="<?php echo esc_attr($s['lock_minutes']);?>"> minutes</td></tr>
+ <?php $boxes=array('disable_xmlrpc'=>'Disable XML-RPC','disable_app_passwords'=>'Disable Application Passwords (enable only if no external integrations)','block_rest_users'=>'Block public REST user enumeration','block_author_enum'=>'Block ?author= ID enumeration','strong_admin_passwords'=>'Require strong administrator passwords','security_headers'=>'Add safe security headers','email_alerts'=>'Email alerts for new administrators');foreach($boxes as $k=>$label):?><tr><th><?php echo esc_html($label);?></th><td><input id="<?php echo esc_attr($k);?>" type="checkbox" <?php checked($s[$k],1);?>></td></tr><?php endforeach;?></tbody></table>
+ <p><button class="button button-primary" id="save">Save protection settings</button> <button class="button" id="protect">Install/refresh Uploads protection</button> <button class="button" id="scan">Scan Uploads for executables</button></p>
+ <pre id="out" style="background:#111;color:#d8ffd8;padding:14px;max-width:1000px;max-height:320px;overflow:auto;white-space:pre-wrap"></pre>
+ <h2>Recent security events</h2><table class="widefat striped"><thead><tr><th>Time</th><th>Type</th><th>Event</th></tr></thead><tbody><?php foreach($log as $e):?><tr><td><?php echo esc_html($e['time']);?></td><td><?php echo esc_html($e['type']);?></td><td><?php echo esc_html($e['message']);?></td></tr><?php endforeach;?></tbody></table><p><button class="button" id="clear">Clear event log</button></p></div>
+ <script>(()=>{const ajax=<?php echo wp_json_encode(admin_url('admin-ajax.php'));?>,nonce=<?php echo wp_json_encode($nonce);?>,out=document.querySelector('#out');const log=m=>{out.textContent+=m+'\n';out.scrollTop=out.scrollHeight};async function post(a,d={}){let f=new FormData();f.append('action',a);f.append('nonce',nonce);Object.entries(d).forEach(([k,v])=>f.append(k,v));let r=await fetch(ajax,{method:'POST',body:f,credentials:'same-origin'}),t=await r.text(),j;try{j=JSON.parse(t)}catch(e){throw Error(t.slice(0,400))}if(!j.success)throw Error((j.data&&j.data.message)||'Failed');return j.data}const checked=id=>document.querySelector('#'+id).checked?1:0;
+ document.querySelector('#save').onclick=async()=>{try{let d=await post('wpfg_save',{login_limit:document.querySelector('#limit').value,lock_minutes:document.querySelector('#minutes').value,disable_xmlrpc:checked('disable_xmlrpc'),disable_app_passwords:checked('disable_app_passwords'),block_rest_users:checked('block_rest_users'),block_author_enum:checked('block_author_enum'),strong_admin_passwords:checked('strong_admin_passwords'),security_headers:checked('security_headers'),email_alerts:checked('email_alerts')});log(d.message)}catch(e){log('ERROR: '+e.message)}};
+ document.querySelector('#protect').onclick=async()=>{try{let d=await post('wpfg_repair_uploads');log(d.message)}catch(e){log('ERROR: '+e.message)}};document.querySelector('#scan').onclick=async()=>{try{let d=await post('wpfg_scan');log('Executable files found: '+d.count);d.found.forEach(x=>log('ALERT '+x.path+' ('+x.bytes+' bytes, '+x.modified+')'))}catch(e){log('ERROR: '+e.message)}};document.querySelector('#clear').onclick=async()=>{try{await post('wpfg_clear_log');location.reload()}catch(e){log('ERROR: '+e.message)}};})();</script><?php }
+}
+register_activation_hook(__FILE__,array('WP_Fortress_Guard','activate'));WP_Fortress_Guard::init();
+
+final class WPFG_GitHub_Updater {
+ const VERSION='1.1.0'; const API='https://api.github.com/repos/TonyBlue5/wp-fortress-guard/releases/latest';
+ public static function init(){add_filter('pre_set_site_transient_update_plugins',array(__CLASS__,'updates'));add_filter('plugins_api',array(__CLASS__,'details'),20,3);add_filter('upgrader_pre_download',array(__CLASS__,'verify_download'),10,4);}
+ private static function release(){
+  $cached=get_site_transient('wpfg_github_release');if(is_array($cached))return $cached;
+  $response=wp_remote_get(self::API,array('timeout'=>12,'headers'=>array('Accept'=>'application/vnd.github+json','User-Agent'=>'WP-Fortress-Guard/'.self::VERSION)));
+  if(is_wp_error($response)||wp_remote_retrieve_response_code($response)!==200){set_site_transient('wpfg_github_release',array(),HOUR_IN_SECONDS);return array();}
+  $json=json_decode(wp_remote_retrieve_body($response),true);$zip='';$sha_url='';
+  foreach((array)($json['assets']??array()) as $asset){if(($asset['name']??'')==='wp-fortress-guard.zip')$zip=$asset['browser_download_url']??'';if(($asset['name']??'')==='wp-fortress-guard.zip.sha256')$sha_url=$asset['browser_download_url']??'';}
+  $hash='';if($sha_url){$h=wp_remote_get($sha_url,array('timeout'=>10,'redirection'=>5,'headers'=>array('User-Agent'=>'WP-Fortress-Guard/'.self::VERSION)));if(!is_wp_error($h)&&wp_remote_retrieve_response_code($h)===200&&preg_match('/\b([a-f0-9]{64})\b/i',wp_remote_retrieve_body($h),$m))$hash=strtolower($m[1]);}
+  $data=array('version'=>ltrim((string)($json['tag_name']??''),'vV'),'package'=>esc_url_raw($zip),'sha256'=>$hash,'url'=>esc_url_raw($json['html_url']??''),'body'=>wp_kses_post($json['body']??''),'published'=>sanitize_text_field($json['published_at']??''));
+  if(!$data['version']||!$data['package']||!$data['sha256'])$data=array();set_site_transient('wpfg_github_release',$data,12*HOUR_IN_SECONDS);return $data;
+ }
+ public static function updates($transient){if(!is_object($transient)||empty($transient->checked))return $transient;$r=self::release();$plugin=plugin_basename(__FILE__);if($r&&version_compare(self::VERSION,$r['version'],'<')){$transient->response[$plugin]=(object)array('slug'=>'wp-fortress-guard','plugin'=>$plugin,'new_version'=>$r['version'],'url'=>$r['url'],'package'=>$r['package'],'requires'=>'6.0','requires_php'=>'7.4');}else unset($transient->response[$plugin]);return $transient;}
+ public static function details($result,$action,$args){if($action!=='plugin_information'||empty($args->slug)||$args->slug!=='wp-fortress-guard')return $result;$r=self::release();if(!$r)return $result;return (object)array('name'=>'WP Fortress Guard','slug'=>'wp-fortress-guard','version'=>$r['version'],'author'=>'Antonis Kanaris Tools','homepage'=>$r['url'],'download_link'=>$r['package'],'requires'=>'6.0','requires_php'=>'7.4','sections'=>array('description'=>'Layered WordPress hardening and monitoring.','changelog'=>$r['body']?:'Security and compatibility maintenance release.'));
+ }
+ public static function verify_download($reply,$package,$upgrader,$hook_extra){$r=self::release();if(!$r||$package!==$r['package'])return $reply;$tmp=download_url($package,300);if(is_wp_error($tmp))return $tmp;$actual=strtolower(hash_file('sha256',$tmp));if(!hash_equals($r['sha256'],$actual)){@unlink($tmp);return new WP_Error('wpfg_bad_signature','WP Fortress Guard update failed SHA-256 verification.');}return $tmp;}
+}
+WPFG_GitHub_Updater::init();
