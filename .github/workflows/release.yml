@@ -1,0 +1,45 @@
+name: Build verified release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag, e.g. v1.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+      - name: Validate version and syntax
+        env:
+          TAG: ${{ inputs.version }}
+        run: |
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          php -l wp-fortress-guard.php
+          grep -F "Version: ${TAG#v}" wp-fortress-guard.php
+      - name: Build plugin ZIP and checksum
+        run: |
+          mkdir -p build/wp-fortress-guard
+          cp wp-fortress-guard.php readme.txt LICENSE build/wp-fortress-guard/
+          cd build
+          zip -qr wp-fortress-guard.zip wp-fortress-guard
+          sha256sum wp-fortress-guard.zip > wp-fortress-guard.zip.sha256
+          unzip -tq wp-fortress-guard.zip
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.version }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" build/wp-fortress-guard.zip build/wp-fortress-guard.zip.sha256 --generate-notes --title "WP Fortress Guard ${TAG#v}"
+
