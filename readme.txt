@@ -1,7 +1,7 @@
 === WP Fortress Guard ===
 Requires at least: 6.0
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.2.0
 
 Layered WordPress hardening for general use:
 - Login rate limiting and generic login errors.
