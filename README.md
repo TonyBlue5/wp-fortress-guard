@@ -17,6 +17,11 @@ Kanaris Tools.
 - Email alerts and local event logging for administrator role changes.
 - Read-only scanner for executable files in uploads.
 - Native WordPress update notifications with SHA-256 package verification.
+- Fortress Intelligence dashboard for WordPress core, plugin and theme update posture.
+- Daily monitoring of the official WordPress security feed.
+- Optional real-time Wordfence Intelligence webhook ingestion with HMAC-SHA256 verification.
+- Local version-range matching so the site does not need to send its plugin/theme inventory through this feature.
+- Email alerts for newly matched vulnerabilities.
 
 ## Automated compatibility checks
 
@@ -46,3 +51,16 @@ off-server backups and add a server or edge WAF.
 ## License
 
 GPL-2.0.
+
+
+## Fortress Intelligence (v1.3.0)
+
+The intelligence layer does not download executable rules or PHP from third-party
+feeds. It consumes advisory metadata only. Incoming Wordfence Intelligence webhook
+payloads are accepted only when their HMAC-SHA256 signature matches the locally
+generated webhook secret, and matching against installed core/plugin/theme versions
+happens on the site.
+
+The dashboard also surfaces normal WordPress core/plugin/theme update posture and
+the official WordPress.org Security news feed. Advisory data is not a substitute for
+installing vendor patches.
