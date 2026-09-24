@@ -43,9 +43,12 @@ jobs:
           wp core download --path=/tmp/wp-test --force
           wp config create --path=/tmp/wp-test --dbname=wordpress --dbuser=root --dbpass=root --dbhost=127.0.0.1 --skip-check
           wp core install --path=/tmp/wp-test --url=http://localhost --title=FortressTest --admin_user=testadmin --admin_password='Strong-Test-Password-2026!' --admin_email=test@example.com --skip-email
-          mkdir -p /tmp/wp-test/wp-content/plugins/wp-fortress-guard
+          mkdir -p /tmp/wp-test/wp-content/plugins/wp-fortress-guard/includes
           cp wp-fortress-guard.php readme.txt /tmp/wp-test/wp-content/plugins/wp-fortress-guard/
+          cp includes/class-wpfg-security-intelligence.php /tmp/wp-test/wp-content/plugins/wp-fortress-guard/includes/
           wp plugin activate wp-fortress-guard --path=/tmp/wp-test
           wp plugin status wp-fortress-guard --path=/tmp/wp-test
           wp eval "echo class_exists('WP_Fortress_Guard') ? 'loaded' : 'missing';" --path=/tmp/wp-test | grep loaded
+          wp eval "echo class_exists('WPFG_Security_Intelligence') ? 'intelligence-loaded' : 'intelligence-missing';" --path=/tmp/wp-test | grep intelligence-loaded
+          wp eval "echo wp_next_scheduled('wpfg_daily_security_intelligence') ? 'cron-scheduled' : 'cron-missing';" --path=/tmp/wp-test | grep cron-scheduled
 

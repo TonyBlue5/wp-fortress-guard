@@ -3,7 +3,7 @@
  * Plugin Name: WP Fortress Guard
  * Plugin URI: https://github.com/TonyBlue5/wp-fortress-guard
  * Description: General-purpose WordPress hardening, login protection, upload shielding, security headers, administrator monitoring and malware indicators.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: Antonis Kanaris Tools
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -68,10 +68,21 @@ final class WP_Fortress_Guard {
  document.querySelector('#save').onclick=async()=>{try{let d=await post('wpfg_save',{login_limit:document.querySelector('#limit').value,lock_minutes:document.querySelector('#minutes').value,disable_xmlrpc:checked('disable_xmlrpc'),disable_app_passwords:checked('disable_app_passwords'),block_rest_users:checked('block_rest_users'),block_author_enum:checked('block_author_enum'),strong_admin_passwords:checked('strong_admin_passwords'),security_headers:checked('security_headers'),email_alerts:checked('email_alerts')});log(d.message)}catch(e){log('ERROR: '+e.message)}};
  document.querySelector('#protect').onclick=async()=>{try{let d=await post('wpfg_repair_uploads');log(d.message)}catch(e){log('ERROR: '+e.message)}};document.querySelector('#scan').onclick=async()=>{try{let d=await post('wpfg_scan');log('Executable files found: '+d.count);d.found.forEach(x=>log('ALERT '+x.path+' ('+x.bytes+' bytes, '+x.modified+')'))}catch(e){log('ERROR: '+e.message)}};document.querySelector('#clear').onclick=async()=>{try{await post('wpfg_clear_log');location.reload()}catch(e){log('ERROR: '+e.message)}};})();</script><?php }
 }
-register_activation_hook(__FILE__,array('WP_Fortress_Guard','activate'));WP_Fortress_Guard::init();
+require_once __DIR__ . '/includes/class-wpfg-security-intelligence.php';
+
+register_activation_hook(
+	__FILE__,
+	static function () {
+		WP_Fortress_Guard::activate();
+		WPFG_Security_Intelligence::activate();
+	}
+);
+register_deactivation_hook( __FILE__, array( 'WPFG_Security_Intelligence', 'deactivate' ) );
+
+WP_Fortress_Guard::init();
 
 final class WPFG_GitHub_Updater {
- const VERSION='1.2.0'; const API='https://api.github.com/repos/TonyBlue5/wp-fortress-guard/releases/latest';
+ const VERSION='1.3.0'; const API='https://api.github.com/repos/TonyBlue5/wp-fortress-guard/releases/latest';
  const PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAnrcZ+pMRgEVDSjrBn4C1\nVVOXavhgRoOu6NF4e8WmE5KlXA3MSkdPGm/iDpuOr74zSU7PHd2vibWtevciGnq9\nNrSZNUOC5LPim5R9MquI864UXZx+AG7l+7VHWlHNM1Kus1i1E3TAv8LXe+5kTOGl\nNjpkVI0q7pTYM/yIhC00do2Bh4+BvltYC+S0XNlBfxer8j4YBKFHOt50l47kPgvr\n8w13rH/HqGCzDq/5g1biYJEd9PdpF5R+6DyTDGlxsvpxHUG+Ag+pTss4NsA+u0J3\n9ldDgPPQm2bTyg1yuIU5H5O6tg62uoNF9FzO35fGQQn1BO5fsIslQmkKr002SmLO\nzgHHPvrLBorHc1CSUUCed0JwlkKAFht3J+JTDUHMpXuTpu3pJ396pIVz5NX/VJpF\n496H3bi8dLRTKzH+/1UYjeWLo8mGboKYJOGOmHSQWfWjVNK4tetRBgrWJ9EiHHKr\n1Gd4jvrHjLxmIZpvtNUrPTJRfPhWt8e0C11mUooJrQbTAgMBAAE=\n-----END PUBLIC KEY-----";
  public static function init(){add_filter('pre_set_site_transient_update_plugins',array(__CLASS__,'updates'));add_filter('plugins_api',array(__CLASS__,'details'),20,3);add_filter('upgrader_pre_download',array(__CLASS__,'verify_download'),10,4);}
  private static function release(){
