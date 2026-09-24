@@ -27,15 +27,15 @@ jobs:
       - name: Reject high-risk PHP execution primitives
         run: |
           set -euo pipefail
-          if grep -REn --include='*.php' '\\b(eval|shell_exec|system|passthru|proc_open|popen|pcntl_exec)\\s*\\(' .; then
+          if grep -REn --include='*.php' -E '(eval|shell_exec|system|passthru|proc_open|popen|pcntl_exec)[[:space:]]*[(]' .; then
             echo "High-risk PHP execution primitive found."
             exit 1
           fi
       - name: Check intelligence security invariants
         run: |
           set -euo pipefail
-          grep -F "hash_hmac( 'sha256', \\$body, \\$secret )" tests/security-intelligence.php
-          grep -F "hash_equals( \\$expected, \\$signature )" includes/class-wpfg-security-intelligence.php
+          grep -F 'hash_hmac( '\''sha256'\'', $body, $secret )' tests/security-intelligence.php
+          grep -F 'hash_equals( $expected, $signature )' includes/class-wpfg-security-intelligence.php
           grep -F "X-Wordfence-Signature" tests/security-intelligence.php
           grep -F "MAX_BODY_BYTES" includes/class-wpfg-security-intelligence.php
           grep -F "current_user_can( 'manage_options' )" includes/class-wpfg-security-intelligence.php
