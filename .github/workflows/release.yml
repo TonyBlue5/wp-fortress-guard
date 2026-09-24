@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag, e.g. v1.2.0'
+        description: 'Version tag, e.g. v1.3.0'
         required: true
         type: string
 
@@ -25,14 +25,17 @@ jobs:
         run: |
           echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
           php -l wp-fortress-guard.php
+          php -l includes/class-wpfg-security-intelligence.php
           grep -F "Version: ${TAG#v}" wp-fortress-guard.php
+          grep -F "const VERSION='${TAG#v}'" wp-fortress-guard.php
       - name: Build plugin ZIP, checksum and signature
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           test -n "$RELEASE_SIGNING_KEY"
-          mkdir -p build/wp-fortress-guard
+          mkdir -p build/wp-fortress-guard/includes
           cp wp-fortress-guard.php readme.txt LICENSE build/wp-fortress-guard/
+          cp includes/class-wpfg-security-intelligence.php build/wp-fortress-guard/includes/
           cd build
           zip -qr wp-fortress-guard.zip wp-fortress-guard
           sha256sum wp-fortress-guard.zip > wp-fortress-guard.zip.sha256
